@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   RotateCw,
   Trash2,
-  Compass,
   Waves,
   Tent,
   Flower2,
@@ -21,7 +20,6 @@ interface BuilderDockProps {
   onSelectCategory: (cat: BuildingCategory) => void;
   onSelectItem: (item: BuildingItemId) => void;
   onRotate: () => void;
-  onResetCamera: () => void;
 }
 
 const CATEGORY_ICONS = {
@@ -48,7 +46,6 @@ export const BuilderDock: React.FC<BuilderDockProps> = ({
   onSelectCategory,
   onSelectItem,
   onRotate,
-  onResetCamera,
 }) => {
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -198,15 +195,6 @@ export const BuilderDock: React.FC<BuilderDockProps> = ({
               }`}
             >
               <Trash2 className="h-4 w-4" />
-            </button>
-
-            <button
-              onClick={onResetCamera}
-              title="Reset camera"
-              aria-label="Reset camera view"
-              className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-amber-400/25 bg-stone-900 text-amber-200 transition hover:border-amber-400 active:scale-95"
-            >
-              <Compass className="h-4 w-4 text-amber-400" />
             </button>
           </div>
         </div>
