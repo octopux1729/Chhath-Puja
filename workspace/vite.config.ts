@@ -17,6 +17,11 @@ export default defineConfig({
     },
   },
   server: {
-    allowedHosts: [".monkeycode-ai.live"],
+    host: true,
+    allowedHosts: true,
+  },
+  preview: {
+    host: true,
+    allowedHosts: true,
   },
 });

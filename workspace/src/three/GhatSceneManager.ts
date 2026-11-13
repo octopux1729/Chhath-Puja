@@ -36,6 +36,180 @@ export interface TileTapCallbackPayload {
   screenY: number;
 }
 
+/**
+ * Soft radial sprite used for sun / moon bloom, stars, shore lamps and the
+ * golden glitter path on the river.
+ */
+let glowTexture: THREE.Texture | null = null;
+function getGlowTexture(): THREE.Texture {
+  if (glowTexture) return glowTexture;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.22, 'rgba(255,255,255,0.72)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  glowTexture = new THREE.CanvasTexture(canvas);
+  glowTexture.colorSpace = THREE.SRGBColorSpace;
+  return glowTexture;
+}
+
+function lerpHex(a: number, b: number, f: number): number {
+  const ar = (a >> 16) & 255;
+  const ag = (a >> 8) & 255;
+  const ab = a & 255;
+  const br = (b >> 16) & 255;
+  const bg = (b >> 8) & 255;
+  const bb = b & 255;
+  const r = Math.round(ar + (br - ar) * f);
+  const g = Math.round(ag + (bg - ag) * f);
+  const bl = Math.round(ab + (bb - ab) * f);
+  return (r << 16) | (g << 8) | bl;
+}
+
+interface AtmosphereStop {
+  t: number;
+  skyTop: number;
+  skyMid: number;
+  skyHorizon: number;
+  sunTint: number;
+  sunIntensity: number;
+  hemiSky: number;
+  hemiGround: number;
+  hemiIntensity: number;
+  lightTint: number;
+  lightIntensity: number;
+  fogDensity: number;
+  exposure: number;
+  stars: number;
+  moon: number;
+  cloudTint: number;
+  cloudOpacity: number;
+  distant: number;
+  waterTint: number;
+  glitter: number;
+}
+
+/** Keyframed Chhath palette, from pre-dawn blue hour to a lamp-lit night. */
+const ATMOSPHERE_STOPS: AtmosphereStop[] = [
+  {
+    t: 0.0,
+    skyTop: 0x1a2748,
+    skyMid: 0x5f5f92,
+    skyHorizon: 0xf2a878,
+    sunTint: 0xffd2a6,
+    sunIntensity: 1.25,
+    hemiSky: 0xbdd2f7,
+    hemiGround: 0x4a3628,
+    hemiIntensity: 0.72,
+    lightTint: 0xffd7b0,
+    lightIntensity: 1.35,
+    fogDensity: 0.014,
+    exposure: 1.06,
+    stars: 0.42,
+    moon: 0.1,
+    cloudTint: 0xf7d3c2,
+    cloudOpacity: 0.62,
+    distant: 0x2c3a46,
+    waterTint: 0x14556e,
+    glitter: 0.35,
+  },
+  {
+    t: 0.18,
+    skyTop: 0x3d74b4,
+    skyMid: 0xe9b083,
+    skyHorizon: 0xffdcb0,
+    sunTint: 0xfff1cf,
+    sunIntensity: 2.55,
+    hemiSky: 0xffe7cc,
+    hemiGround: 0x6b432a,
+    hemiIntensity: 1.18,
+    lightTint: 0xffe0b8,
+    lightIntensity: 2.45,
+    fogDensity: 0.011,
+    exposure: 1.16,
+    stars: 0.05,
+    moon: 0.0,
+    cloudTint: 0xfff3e4,
+    cloudOpacity: 0.85,
+    distant: 0x3f5340,
+    waterTint: 0x1c8ba3,
+    glitter: 0.85,
+  },
+  {
+    t: 0.52,
+    skyTop: 0x274a7f,
+    skyMid: 0xc9683c,
+    skyHorizon: 0xffc06a,
+    sunTint: 0xffce7d,
+    sunIntensity: 2.1,
+    hemiSky: 0xffd8ae,
+    hemiGround: 0x5c2d16,
+    hemiIntensity: 1.02,
+    lightTint: 0xff9e54,
+    lightIntensity: 2.05,
+    fogDensity: 0.0125,
+    exposure: 1.12,
+    stars: 0.1,
+    moon: 0.12,
+    cloudTint: 0xffd3a8,
+    cloudOpacity: 0.78,
+    distant: 0x4a3a33,
+    waterTint: 0x0e7490,
+    glitter: 1.0,
+  },
+  {
+    t: 0.72,
+    skyTop: 0x1b1e42,
+    skyMid: 0x83394f,
+    skyHorizon: 0xef8a52,
+    sunTint: 0xff9a52,
+    sunIntensity: 1.5,
+    hemiSky: 0xd2a3a8,
+    hemiGround: 0x40222a,
+    hemiIntensity: 0.7,
+    lightTint: 0xff6f3a,
+    lightIntensity: 1.15,
+    fogDensity: 0.014,
+    exposure: 1.04,
+    stars: 0.55,
+    moon: 0.55,
+    cloudTint: 0xcf8b8b,
+    cloudOpacity: 0.6,
+    distant: 0x332534,
+    waterTint: 0x14405c,
+    glitter: 0.7,
+  },
+  {
+    t: 0.94,
+    skyTop: 0x05091c,
+    skyMid: 0x111a3a,
+    skyHorizon: 0x45315a,
+    sunTint: 0x6d7bb0,
+    sunIntensity: 0.55,
+    hemiSky: 0x93a6d6,
+    hemiGround: 0x1d1a24,
+    hemiIntensity: 0.42,
+    lightTint: 0x9fb2e8,
+    lightIntensity: 0.55,
+    fogDensity: 0.016,
+    exposure: 0.98,
+    stars: 1.0,
+    moon: 1.0,
+    cloudTint: 0x4a5478,
+    cloudOpacity: 0.5,
+    distant: 0x0b1120,
+    waterTint: 0x0a2740,
+    glitter: 0.22,
+  },
+];
+
 export class GhatSceneManager {
   private canvas: HTMLCanvasElement;
   private renderer: THREE.WebGLRenderer;
@@ -43,14 +217,14 @@ export class GhatSceneManager {
   private camera: THREE.PerspectiveCamera;
 
   // Camera spherical coordinates
-  private camTarget = new THREE.Vector3(0, 0.2, 0);
-  private targetCamTarget = new THREE.Vector3(0, 0.2, 0);
+  private camTarget = new THREE.Vector3(0, 0.35, 0);
+  private targetCamTarget = new THREE.Vector3(0, 0.35, 0);
   private theta = Math.PI * 0.22; // horizontal azimuth
   private targetTheta = Math.PI * 0.22;
-  private phi = 0.88; // polar angle from vertical
-  private targetPhi = 0.88;
-  private radius = 14.5;
-  private targetRadius = 14.5;
+  private phi = 1.24; // polar angle from vertical
+  private targetPhi = 1.24;
+  private radius = 15.5;
+  private targetRadius = 15.5;
   private minRadius = 7.0;
   private maxRadius = 28.0;
   private hasInitializedFraming = false;
@@ -68,10 +242,47 @@ export class GhatSceneManager {
   private sunCoreMat!: THREE.MeshBasicMaterial;
   private sunHaloMat!: THREE.MeshBasicMaterial;
   private sunGlowMat!: THREE.MeshBasicMaterial;
+  private sunSpriteMat!: THREE.SpriteMaterial;
+  private sunSprite!: THREE.Sprite;
+  private moonOrbGroup!: THREE.Group;
+  private moonCoreMat!: THREE.MeshBasicMaterial;
+  private moonHaloMat!: THREE.MeshBasicMaterial;
+  private moonSpriteMat!: THREE.SpriteMaterial;
+  private moonSprite!: THREE.Sprite;
+  private skyDome!: THREE.Mesh;
+  private skyUniforms!: {
+    topColor: { value: THREE.Color };
+    midColor: { value: THREE.Color };
+    horizonColor: { value: THREE.Color };
+    sunColor: { value: THREE.Color };
+    sunDirection: { value: THREE.Vector3 };
+    sunGlow: { value: number };
+    bandGlow: { value: number };
+  };
+  private starLayers: THREE.Points[] = [];
+  private starMats: THREE.PointsMaterial[] = [];
   private cloudGroup!: THREE.Group;
-  private cloudMats: THREE.MeshStandardMaterial[] = [];
-  private lightingPreset: LightingPreset = 'sunset';
+  private cloudMat!: THREE.MeshStandardMaterial;
+  private distantMat!: THREE.MeshBasicMaterial;
+  private distantShoreMat!: THREE.MeshBasicMaterial;
+  private shoreLightMat!: THREE.PointsMaterial;
+  private riverMat!: THREE.MeshStandardMaterial;
+  private sunGlitterMat!: THREE.MeshBasicMaterial;
+  private sunGlitter!: THREE.Mesh;
+  private moonGlitterMat!: THREE.MeshBasicMaterial;
+  private moonGlitter!: THREE.Mesh;
+  private fireflyMat!: THREE.PointsMaterial;
   private ritualProgress = 0.52;
+  private targetRitualProgress = 0.52;
+  private hasAtmosphereInit = false;
+
+  // Cached scratch objects to keep the render loop allocation-free
+  private scratchColorA = new THREE.Color();
+  private scratchColorB = new THREE.Color();
+  private scratchColorC = new THREE.Color();
+  private scratchColorD = new THREE.Color();
+  private sunPosition = new THREE.Vector3(-38, 18, -62);
+  private moonPosition = new THREE.Vector3(30, -6, -56);
 
   // Grid & Diorama Groups
   private rootGroup = new THREE.Group();
@@ -147,10 +358,10 @@ export class GhatSceneManager {
     this.renderer.toneMappingExposure = 1.12;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xc45a2a);
-    this.scene.fog = new THREE.FogExp2(0xc45a2a, 0.012);
+    this.scene.background = new THREE.Color(0x274a7f);
+    this.scene.fog = new THREE.FogExp2(0x274a7f, 0.0125);
 
-    this.camera = new THREE.PerspectiveCamera(42, 1, 0.5, 120);
+    this.camera = new THREE.PerspectiveCamera(46, 1, 0.5, 320);
 
     this.waterSharedMat = new THREE.MeshStandardMaterial({
       color: 0x0e8aaa,
@@ -188,6 +399,7 @@ export class GhatSceneManager {
     this.scene.add(this.hoverRing);
 
     this.setupLightingAndSun();
+    this.setupBackdrop();
     this.setupDioramaBase();
 
     this.rootGroup.add(this.tilesGroup);
@@ -211,12 +423,12 @@ export class GhatSceneManager {
     this.scene.add(this.hemiLight);
 
     this.sunLight = new THREE.DirectionalLight(0xffc078, 2.35);
-    this.sunLight.position.set(-12, 11, -14);
+    this.sunLight.position.set(-16, 20, -18);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.width = 1024;
     this.sunLight.shadow.mapSize.height = 1024;
     this.sunLight.shadow.camera.near = 2;
-    this.sunLight.shadow.camera.far = 42;
+    this.sunLight.shadow.camera.far = 48;
     const d = 9.5;
     this.sunLight.shadow.camera.left = -d;
     this.sunLight.shadow.camera.right = d;
@@ -225,22 +437,26 @@ export class GhatSceneManager {
     this.sunLight.shadow.bias = -0.0008;
     this.scene.add(this.sunLight);
 
-    this.warmPointLight = new THREE.PointLight(0xff8c00, 0.9, 20, 1.35);
-    this.warmPointLight.position.set(0, 2.2, 0.5);
+    this.warmPointLight = new THREE.PointLight(0xff8c00, 0.9, 24, 1.3);
+    this.warmPointLight.position.set(0, 2.4, 0.5);
     this.scene.add(this.warmPointLight);
 
+    // Soft additive bloom shared by the sun, moon, stars and river glitter
+    const glow = getGlowTexture();
+
+    // --- Sun disc ---
     this.sunOrbGroup = new THREE.Group();
     this.sunCoreMat = new THREE.MeshBasicMaterial({ color: 0xfff7d6 });
-    const sunCore = new THREE.Mesh(new THREE.SphereGeometry(2.15, 28, 24), this.sunCoreMat);
+    const sunCore = new THREE.Mesh(new THREE.SphereGeometry(2.7, 30, 24), this.sunCoreMat);
     this.sunOrbGroup.add(sunCore);
 
     this.sunHaloMat = new THREE.MeshBasicMaterial({
-      color: 0xff7a33,
+      color: 0xff9a4d,
       transparent: true,
-      opacity: 0.32,
+      opacity: 0.3,
       depthWrite: false,
     });
-    const sunHalo = new THREE.Mesh(new THREE.SphereGeometry(3.6, 28, 24), this.sunHaloMat);
+    const sunHalo = new THREE.Mesh(new THREE.SphereGeometry(4.4, 28, 24), this.sunHaloMat);
     this.sunOrbGroup.add(sunHalo);
 
     this.sunGlowMat = new THREE.MeshBasicMaterial({
@@ -249,58 +465,434 @@ export class GhatSceneManager {
       opacity: 0.16,
       depthWrite: false,
     });
-    const sunGlow = new THREE.Mesh(new THREE.SphereGeometry(5.4, 24, 20), this.sunGlowMat);
+    const sunGlow = new THREE.Mesh(new THREE.SphereGeometry(6.6, 24, 20), this.sunGlowMat);
     this.sunOrbGroup.add(sunGlow);
 
-    this.sunOrbGroup.position.set(-14, 5.5, -24);
+    this.sunSpriteMat = new THREE.SpriteMaterial({
+      map: glow,
+      color: 0xffcf86,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: false,
+    });
+    this.sunSprite = new THREE.Sprite(this.sunSpriteMat);
+    this.sunSprite.scale.set(34, 34, 1);
+    this.sunOrbGroup.add(this.sunSprite);
+
+    this.sunOrbGroup.position.copy(this.sunPosition);
     this.scene.add(this.sunOrbGroup);
 
-    this.cloudGroup = new THREE.Group();
-    const cloudSpecs = [
-      { x: -10, y: 8.2, z: -18, sx: 3.4, sy: 1.1, sz: 1.8 },
-      { x: -4.5, y: 9.4, z: -20, sx: 2.6, sy: 0.9, sz: 1.5 },
-      { x: 6, y: 8.8, z: -19, sx: 3.8, sy: 1.2, sz: 2.0 },
-      { x: 11, y: 7.6, z: -16, sx: 2.4, sy: 0.8, sz: 1.4 },
-      { x: 2, y: 10.2, z: -22, sx: 2.2, sy: 0.7, sz: 1.2 },
-      { x: -14, y: 7.1, z: -15, sx: 2.8, sy: 0.85, sz: 1.6 },
-    ];
-    for (const spec of cloudSpecs) {
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0xffe4c8,
-        roughness: 0.92,
-        transparent: true,
-        opacity: 0.78,
-        depthWrite: false,
-      });
-      this.cloudMats.push(mat);
-      const puff = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), mat);
-      puff.scale.set(spec.sx, spec.sy, spec.sz);
-      puff.position.set(spec.x, spec.y, spec.z);
-      this.cloudGroup.add(puff);
+    // --- Moon with a couple of soft maria ---
+    this.moonOrbGroup = new THREE.Group();
+    this.moonCoreMat = new THREE.MeshBasicMaterial({ color: 0xf6f8ff });
+    const moonCore = new THREE.Mesh(new THREE.SphereGeometry(2.4, 26, 20), this.moonCoreMat);
+    this.moonOrbGroup.add(moonCore);
 
-      const puff2 = new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 7), mat);
-      puff2.scale.set(spec.sx * 0.55, spec.sy * 0.8, spec.sz * 0.7);
-      puff2.position.set(spec.x + spec.sx * 0.35, spec.y + 0.15, spec.z + 0.2);
-      this.cloudGroup.add(puff2);
+    const mareMat = new THREE.MeshBasicMaterial({
+      color: 0xd7ddf2,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+    });
+    const mareSpecs: Array<[number, number, number]> = [
+      [0.7, 0.55, 0.62],
+      [-0.85, -0.25, 0.44],
+      [0.1, -0.95, 0.34],
+    ];
+    for (const [mx, my, mr] of mareSpecs) {
+      const mare = new THREE.Mesh(new THREE.CircleGeometry(mr, 16), mareMat);
+      mare.position.set(mx, my, 2.28);
+      this.moonOrbGroup.add(mare);
+    }
+
+    this.moonHaloMat = new THREE.MeshBasicMaterial({
+      color: 0xbcd0ff,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+    });
+    this.moonOrbGroup.add(new THREE.Mesh(new THREE.SphereGeometry(3.7, 24, 20), this.moonHaloMat));
+
+    this.moonSpriteMat = new THREE.SpriteMaterial({
+      map: glow,
+      color: 0xa9c4ff,
+      transparent: true,
+      opacity: 0.55,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: false,
+    });
+    this.moonSprite = new THREE.Sprite(this.moonSpriteMat);
+    this.moonSprite.scale.set(24, 24, 1);
+    this.moonOrbGroup.add(this.moonSprite);
+
+    this.moonOrbGroup.position.copy(this.moonPosition);
+    this.scene.add(this.moonOrbGroup);
+  }
+
+  /** Gradient sky dome, stars, clouds, river and the far Chhath ghat skyline. */
+  private setupBackdrop(): void {
+    this.setupSkyDome();
+    this.setupStars();
+    this.setupCloudBanks();
+    this.setupRiver();
+    this.setupDistantShore();
+    this.setupFireflies();
+  }
+
+  private setupSkyDome(): void {
+    this.skyUniforms = {
+      topColor: { value: new THREE.Color(0x274a7f) },
+      midColor: { value: new THREE.Color(0xc9683c) },
+      horizonColor: { value: new THREE.Color(0xffc06a) },
+      sunColor: { value: new THREE.Color(0xffce7d) },
+      sunDirection: { value: this.sunPosition.clone().normalize() },
+      sunGlow: { value: 0.85 },
+      bandGlow: { value: 0.5 },
+    };
+
+    const skyMat = new THREE.ShaderMaterial({
+      uniforms: this.skyUniforms,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      vertexShader: /* glsl */ `
+        varying vec3 vWorldDir;
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldDir = normalize(worldPos.xyz);
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 topColor;
+        uniform vec3 midColor;
+        uniform vec3 horizonColor;
+        uniform vec3 sunColor;
+        uniform vec3 sunDirection;
+        uniform float sunGlow;
+        uniform float bandGlow;
+        varying vec3 vWorldDir;
+
+        void main() {
+          float h = vWorldDir.y;
+          vec3 col = mix(horizonColor, midColor, smoothstep(-0.04, 0.3, h));
+          col = mix(col, topColor, smoothstep(0.14, 0.92, h));
+
+          float d = max(dot(normalize(vWorldDir), normalize(sunDirection)), 0.0);
+          col += sunColor * (pow(d, 5.0) * 0.3 + pow(d, 70.0) * 0.55) * sunGlow;
+
+          float haze = exp(-max(h, 0.0) * 8.0) * bandGlow;
+          col = mix(col, horizonColor, haze * 0.55);
+
+          gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `,
+    });
+
+    this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(150, 40, 24), skyMat);
+    this.skyDome.renderOrder = -10;
+    this.skyDome.frustumCulled = false;
+    this.scene.add(this.skyDome);
+  }
+
+  private setupStars(): void {
+    const glow = getGlowTexture();
+    const layerSpecs = [
+      { count: 260, size: 2.2, weight: 1.0 },
+      { count: 140, size: 3.6, weight: 0.85 },
+      { count: 55, size: 6.0, weight: 0.7 },
+    ];
+
+    for (const spec of layerSpecs) {
+      const positions = new Float32Array(spec.count * 3);
+      for (let i = 0; i < spec.count; i++) {
+        const y = 0.06 + Math.random() * 0.94;
+        const ang = Math.random() * Math.PI * 2;
+        const ring = Math.sqrt(Math.max(0, 1 - y * y));
+        const radius = 128 + Math.random() * 8;
+        positions[i * 3] = Math.cos(ang) * ring * radius;
+        positions[i * 3 + 1] = y * radius;
+        positions[i * 3 + 2] = Math.sin(ang) * ring * radius;
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+      const mat = new THREE.PointsMaterial({
+        map: glow,
+        color: 0xeef3ff,
+        size: spec.size,
+        sizeAttenuation: false,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        fog: false,
+      });
+      const points = new THREE.Points(geo, mat);
+      points.frustumCulled = false;
+      points.renderOrder = -5;
+      this.scene.add(points);
+      this.starLayers.push(points);
+      this.starMats.push(mat);
+    }
+  }
+
+  private setupCloudBanks(): void {
+    this.cloudGroup = new THREE.Group();
+    this.cloudMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: new THREE.Color(0xffd3a8),
+      emissiveIntensity: 0.4,
+      roughness: 1,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+      fog: false,
+    });
+
+    const puffGeo = new THREE.SphereGeometry(1, 12, 9);
+    const clusterCount = 11;
+    for (let i = 0; i < clusterCount; i++) {
+      const ang = (i / clusterCount) * Math.PI * 2 + Math.random() * 0.22;
+      const rad = 48 + Math.random() * 26;
+      const baseY = 8 + Math.random() * 13;
+
+      const cluster = new THREE.Group();
+      cluster.position.set(Math.cos(ang) * rad, baseY, Math.sin(ang) * rad);
+
+      const puffCount = 4 + Math.floor(Math.random() * 3);
+      for (let p = 0; p < puffCount; p++) {
+        const puff = new THREE.Mesh(puffGeo, this.cloudMat);
+        const sx = 3.6 + Math.random() * 4.6;
+        const sy = 1.1 + Math.random() * 1.7;
+        const sz = 2.2 + Math.random() * 2.8;
+        puff.scale.set(sx, sy, sz);
+        puff.position.set(
+          (Math.random() - 0.5) * sx * 1.7,
+          (Math.random() - 0.5) * sy * 0.8,
+          (Math.random() - 0.5) * sz * 1.2
+        );
+        cluster.add(puff);
+      }
+      cluster.rotation.y = Math.random() * Math.PI;
+      this.cloudGroup.add(cluster);
     }
     this.scene.add(this.cloudGroup);
+  }
 
-    const moteCount = 56;
+  private setupRiver(): void {
+    this.riverMat = new THREE.MeshStandardMaterial({
+      color: 0x0e7490,
+      roughness: 0.2,
+      metalness: 0.5,
+    });
+    const river = new THREE.Mesh(new THREE.CircleGeometry(142, 72), this.riverMat);
+    river.rotation.x = -Math.PI / 2;
+    river.position.y = -0.74;
+    this.scene.add(river);
+
+    const glow = getGlowTexture();
+
+    this.sunGlitterMat = new THREE.MeshBasicMaterial({
+      map: glow,
+      color: 0xffc46a,
+      transparent: true,
+      opacity: 0.5,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: false,
+    });
+    const sunPath = new THREE.PlaneGeometry(15, 96);
+    sunPath.rotateX(-Math.PI / 2);
+    this.sunGlitter = new THREE.Mesh(sunPath, this.sunGlitterMat);
+    this.sunGlitter.position.set(-26, -0.72, -46);
+    this.sunGlitter.rotation.y = Math.atan2(this.sunPosition.x, this.sunPosition.z);
+    this.scene.add(this.sunGlitter);
+
+    this.moonGlitterMat = new THREE.MeshBasicMaterial({
+      map: glow,
+      color: 0xa9c4ff,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: false,
+    });
+    const moonPath = new THREE.PlaneGeometry(11, 74);
+    moonPath.rotateX(-Math.PI / 2);
+    this.moonGlitter = new THREE.Mesh(moonPath, this.moonGlitterMat);
+    this.moonGlitter.position.set(26, -0.72, -44);
+    this.moonGlitter.rotation.y = Math.atan2(this.moonPosition.x, this.moonPosition.z);
+    this.scene.add(this.moonGlitter);
+  }
+
+  private setupDistantShore(): void {
+    this.distantShoreMat = new THREE.MeshBasicMaterial({ color: 0x4a3a33 });
+    this.distantMat = new THREE.MeshBasicMaterial({ color: 0x3c4a3c });
+
+    // Far bank that the river meets on the horizon
+    const bank = new THREE.Mesh(
+      new THREE.CylinderGeometry(38.5, 42, 3.6, 72, 1, true),
+      this.distantShoreMat
+    );
+    bank.position.y = -2.35;
+    this.scene.add(bank);
+
+    const stepBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(37.6, 38.3, 0.7, 72, 1, true),
+      this.distantShoreMat
+    );
+    stepBand.position.y = -0.62;
+    this.scene.add(stepBand);
+
+    // Cheap instanced tree line around the whole horizon
+    const treeCount = 84;
+    const trunkGeo = new THREE.CylinderGeometry(0.14, 0.24, 1, 5);
+    const canopyGeo = new THREE.SphereGeometry(1, 7, 6);
+    const trunks = new THREE.InstancedMesh(trunkGeo, this.distantMat, treeCount);
+    const canopies = new THREE.InstancedMesh(canopyGeo, this.distantMat, treeCount * 2);
+    const dummy = new THREE.Object3D();
+    let canopyIdx = 0;
+
+    for (let i = 0; i < treeCount; i++) {
+      const ang = (i / treeCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.14;
+      const rad = 40 + Math.random() * 12;
+      const baseY = -0.45 + Math.random() * 0.4;
+      const height = 2.6 + Math.random() * 4.8;
+      const x = Math.cos(ang) * rad;
+      const z = Math.sin(ang) * rad;
+
+      dummy.position.set(x, baseY + height / 2, z);
+      dummy.rotation.set(0, Math.random() * Math.PI, 0);
+      dummy.scale.set(1 + Math.random() * 0.7, height, 1 + Math.random() * 0.7);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+
+      const crown = 1.3 + Math.random() * 1.6;
+      dummy.position.set(x, baseY + height + crown * 0.3, z);
+      dummy.rotation.set(0, Math.random() * Math.PI, 0);
+      dummy.scale.set(crown, crown * 0.88, crown);
+      dummy.updateMatrix();
+      canopies.setMatrixAt(canopyIdx, dummy.matrix);
+      canopyIdx += 1;
+
+      const sub = crown * 0.62;
+      dummy.position.set(
+        x + (Math.random() - 0.5) * crown * 1.3,
+        baseY + height + crown * 0.85,
+        z + (Math.random() - 0.5) * crown * 1.3
+      );
+      dummy.scale.set(sub, sub * 0.82, sub);
+      dummy.updateMatrix();
+      canopies.setMatrixAt(canopyIdx, dummy.matrix);
+      canopyIdx += 1;
+    }
+    trunks.instanceMatrix.needsUpdate = true;
+    canopies.instanceMatrix.needsUpdate = true;
+    trunks.frustumCulled = false;
+    canopies.frustumCulled = false;
+    this.scene.add(trunks, canopies);
+
+    // Small temples and gate pavilions dotting the far ghat
+    const shrineAngles = [0.4, 0.95, 1.55, 2.25, 2.95, 3.7, 4.45, 5.15, 5.8];
+    shrineAngles.forEach((ang, idx) => {
+      const rad = 36 + ((idx * 7) % 5);
+      const shrine = new THREE.Group();
+      shrine.position.set(Math.cos(ang) * rad, -0.55, Math.sin(ang) * rad);
+      shrine.rotation.y = -ang;
+
+      const base = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.3, 3.2), this.distantMat);
+      base.position.y = 0.65;
+      shrine.add(base);
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.4, 2.1), this.distantMat);
+      body.position.y = 2.5;
+      shrine.add(body);
+
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(1.2, 12, 9), this.distantMat);
+      dome.scale.set(1, 1.15, 1);
+      dome.position.y = 4.15;
+      shrine.add(dome);
+
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(0.32, 1.7, 8), this.distantMat);
+      spire.position.y = 5.6;
+      shrine.add(spire);
+
+      for (const sx of [-1, 1]) {
+        const pavilion = new THREE.Mesh(
+          new THREE.BoxGeometry(0.9, 1.6, 0.9),
+          this.distantMat
+        );
+        pavilion.position.set(sx * 2.7, 0.8, 0.4);
+        shrine.add(pavilion);
+
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(0.8, 0.95, 4), this.distantMat);
+        roof.rotation.y = Math.PI / 4;
+        roof.position.set(sx * 2.7, 2.05, 0.4);
+        shrine.add(roof);
+      }
+
+      this.scene.add(shrine);
+    });
+
+    // Warm lamps along the distant ghat, only glowing once evening falls
+    const lampCount = 96;
+    const lampPositions = new Float32Array(lampCount * 3);
+    for (let i = 0; i < lampCount; i++) {
+      const ang = (i / lampCount) * Math.PI * 2 + Math.random() * 0.04;
+      const rad = 37.2 + Math.random() * 1.4;
+      lampPositions[i * 3] = Math.cos(ang) * rad;
+      lampPositions[i * 3 + 1] = -0.5 + Math.random() * 0.95;
+      lampPositions[i * 3 + 2] = Math.sin(ang) * rad;
+    }
+    const lampGeo = new THREE.BufferGeometry();
+    lampGeo.setAttribute('position', new THREE.BufferAttribute(lampPositions, 3));
+    this.shoreLightMat = new THREE.PointsMaterial({
+      map: getGlowTexture(),
+      color: 0xffb765,
+      size: 5.5,
+      sizeAttenuation: false,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+    });
+    const lamps = new THREE.Points(lampGeo, this.shoreLightMat);
+    lamps.frustumCulled = false;
+    this.scene.add(lamps);
+  }
+
+  private setupFireflies(): void {
+    const moteCount = 84;
     const positions = new Float32Array(moteCount * 3);
     for (let i = 0; i < moteCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 16;
-      positions[i * 3 + 1] = 0.4 + Math.random() * 4.8;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 16;
+      positions[i * 3] = (Math.random() - 0.5) * 17;
+      positions[i * 3 + 1] = 0.35 + Math.random() * 5.4;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 17;
     }
     const moteGeo = new THREE.BufferGeometry();
     moteGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const moteMat = new THREE.PointsMaterial({
-      color: 0xfde047,
-      size: 0.12,
+
+    this.fireflyMat = new THREE.PointsMaterial({
+      map: getGlowTexture(),
+      color: 0xffe9a3,
+      size: 5,
+      sizeAttenuation: false,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.3,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false,
     });
-    this.ambientFireflies = new THREE.Points(moteGeo, moteMat);
+    this.ambientFireflies = new THREE.Points(moteGeo, this.fireflyMat);
+    this.ambientFireflies.frustumCulled = false;
     this.scene.add(this.ambientFireflies);
   }
 
@@ -325,30 +917,14 @@ export class GhatSceneManager {
     goldRim.position.y = -0.14;
     this.rootGroup.add(goldRim);
 
-    const river = new THREE.Mesh(
-      new THREE.CircleGeometry(28, 36),
-      new THREE.MeshStandardMaterial({
-        color: 0x0e7490,
-        roughness: 0.18,
-        metalness: 0.32,
-        transparent: true,
-        opacity: 0.55,
-      })
+    // A warm stone apron just below the ghat rim, catching the low sun
+    const apron = new THREE.Mesh(
+      new THREE.BoxGeometry(GRID_SIZE + 1.8, 0.36, GRID_SIZE + 1.8),
+      new THREE.MeshStandardMaterial({ color: 0x74401f, roughness: 0.9 })
     );
-    river.rotation.x = -Math.PI / 2;
-    river.position.y = -0.72;
-    this.scene.add(river);
-
-    const farBank = new THREE.Mesh(
-      new THREE.CylinderGeometry(32, 34, 0.6, 28, 1, true),
-      new THREE.MeshStandardMaterial({
-        color: 0x6b4423,
-        roughness: 0.95,
-        side: THREE.DoubleSide,
-      })
-    );
-    farBank.position.y = -0.9;
-    this.scene.add(farBank);
+    apron.position.y = -0.5;
+    apron.receiveShadow = true;
+    this.rootGroup.add(apron);
 
     // Pond basin floor beneath all tiles
     const basinFloor = new THREE.Mesh(
@@ -651,72 +1227,168 @@ export class GhatSceneManager {
   }
 
   public setLightingState(preset: LightingPreset, progress01: number): void {
-    this.lightingPreset = preset;
-    this.ritualProgress = THREE.MathUtils.clamp(progress01, 0, 1);
+    const presetProgress =
+      preset === 'twilight' ? 0.94 : preset === 'dawn' ? 0.18 : 0.52;
+    const target = Number.isFinite(progress01) ? progress01 : presetProgress;
+    this.targetRitualProgress = THREE.MathUtils.clamp(target, 0, 1);
+    if (!this.hasAtmosphereInit) {
+      this.ritualProgress = this.targetRitualProgress;
+      this.hasAtmosphereInit = true;
+    }
   }
 
-  private updateAtmosphere(timeSec: number): void {
-    let t = this.ritualProgress;
-    if (this.lightingPreset === 'sunset') t = 0.52;
-    else if (this.lightingPreset === 'twilight') t = 0.94;
-    else if (this.lightingPreset === 'dawn') t = 0.18;
-
-    const skyDawn = new THREE.Color(0xf4a261);
-    const skySunset = new THREE.Color(0xc2410c);
-    const skyDusk = new THREE.Color(0x7c1d12);
-    const skyTwilight = new THREE.Color(0x1e1436);
-
-    const currentSky = new THREE.Color();
-    if (t < 0.4) {
-      currentSky.lerpColors(skyDawn, skySunset, t / 0.4);
-    } else if (t < 0.72) {
-      currentSky.lerpColors(skySunset, skyDusk, (t - 0.4) / 0.32);
-    } else {
-      currentSky.lerpColors(skyDusk, skyTwilight, (t - 0.72) / 0.28);
-    }
-
-    this.scene.background = currentSky;
-    if (this.scene.fog instanceof THREE.FogExp2) {
-      this.scene.fog.color.copy(currentSky);
-      this.scene.fog.density = THREE.MathUtils.lerp(0.01, 0.018, t);
-    }
-
-    const sunY = THREE.MathUtils.lerp(10.2, 1.15, t);
-    this.sunOrbGroup.position.set(-13, sunY, -24);
-    const pulse = 1 + Math.sin(timeSec * 1.6) * 0.025;
-    this.sunOrbGroup.scale.setScalar(pulse);
-    this.sunCoreMat.color.setHex(t > 0.75 ? 0xffd7a1 : 0xfff7d6);
-    this.sunHaloMat.opacity = THREE.MathUtils.lerp(0.28, 0.48, t);
-    this.sunGlowMat.opacity = THREE.MathUtils.lerp(0.12, 0.22, t);
-
-    this.sunLight.position.set(-11, Math.max(3.2, sunY + 3.5), -14);
-    this.sunLight.intensity = THREE.MathUtils.lerp(2.55, 0.72, t);
-
-    if (this.cloudGroup) {
-      this.cloudGroup.position.x = Math.sin(timeSec * 0.018) * 1.6;
-      this.cloudGroup.position.y = Math.sin(timeSec * 0.04) * 0.18;
-      const cloudTint = new THREE.Color().lerpColors(
-        new THREE.Color(0xfff1e0),
-        new THREE.Color(0x8b6b9a),
-        t
-      );
-      for (const mat of this.cloudMats) {
-        mat.color.copy(cloudTint);
-        mat.opacity = THREE.MathUtils.lerp(0.82, 0.42, t);
+  /** Blends the keyframed Chhath palette for the current time of day. */
+  private sampleAtmosphere(t: number): AtmosphereStop {
+    if (t <= ATMOSPHERE_STOPS[0].t) return { ...ATMOSPHERE_STOPS[0] };
+    for (let i = 1; i < ATMOSPHERE_STOPS.length; i++) {
+      const b = ATMOSPHERE_STOPS[i];
+      if (t <= b.t) {
+        const a = ATMOSPHERE_STOPS[i - 1];
+        const f = THREE.MathUtils.smoothstep((t - a.t) / (b.t - a.t), 0, 1);
+        return {
+          t,
+          skyTop: lerpHex(a.skyTop, b.skyTop, f),
+          skyMid: lerpHex(a.skyMid, b.skyMid, f),
+          skyHorizon: lerpHex(a.skyHorizon, b.skyHorizon, f),
+          sunTint: lerpHex(a.sunTint, b.sunTint, f),
+          sunIntensity: THREE.MathUtils.lerp(a.sunIntensity, b.sunIntensity, f),
+          hemiSky: lerpHex(a.hemiSky, b.hemiSky, f),
+          hemiGround: lerpHex(a.hemiGround, b.hemiGround, f),
+          hemiIntensity: THREE.MathUtils.lerp(a.hemiIntensity, b.hemiIntensity, f),
+          lightTint: lerpHex(a.lightTint, b.lightTint, f),
+          lightIntensity: THREE.MathUtils.lerp(a.lightIntensity, b.lightIntensity, f),
+          fogDensity: THREE.MathUtils.lerp(a.fogDensity, b.fogDensity, f),
+          exposure: THREE.MathUtils.lerp(a.exposure, b.exposure, f),
+          stars: THREE.MathUtils.lerp(a.stars, b.stars, f),
+          moon: THREE.MathUtils.lerp(a.moon, b.moon, f),
+          cloudTint: lerpHex(a.cloudTint, b.cloudTint, f),
+          cloudOpacity: THREE.MathUtils.lerp(a.cloudOpacity, b.cloudOpacity, f),
+          distant: lerpHex(a.distant, b.distant, f),
+          waterTint: lerpHex(a.waterTint, b.waterTint, f),
+          glitter: THREE.MathUtils.lerp(a.glitter, b.glitter, f),
+        };
       }
     }
-    this.sunLight.color.lerpColors(
-      new THREE.Color(0xffe0b2),
-      new THREE.Color(0xff5722),
-      Math.min(1, t * 1.25)
+    return { ...ATMOSPHERE_STOPS[ATMOSPHERE_STOPS.length - 1] };
+  }
+
+  private updateAtmosphere(timeSec: number, dt: number): void {
+    // Smoothly ease between day / sunset / night so the switch feels alive
+    const ease = 1 - Math.exp(-2.4 * dt);
+    this.ritualProgress += (this.targetRitualProgress - this.ritualProgress) * ease;
+    const t = this.ritualProgress;
+    const s = this.sampleAtmosphere(t);
+
+    const topColor = this.scratchColorA.setHex(s.skyTop);
+    const midColor = this.scratchColorB.setHex(s.skyMid);
+    const horizonColor = this.scratchColorC.setHex(s.skyHorizon);
+
+    this.skyUniforms.topColor.value.copy(topColor);
+    this.skyUniforms.midColor.value.copy(midColor);
+    this.skyUniforms.horizonColor.value.copy(horizonColor);
+    this.skyUniforms.sunColor.value.setHex(s.sunTint);
+    this.skyUniforms.bandGlow.value = 0.42 + Math.sin(t * Math.PI) * 0.35;
+
+    // --- Sun arc across the river ---
+    const sunAlt = 22 * Math.cos((t - 0.35) * Math.PI * 1.75) - 4;
+    this.sunPosition.set(-38, sunAlt, -62);
+    this.sunOrbGroup.position.copy(this.sunPosition);
+    this.skyUniforms.sunDirection.value.copy(this.sunPosition).normalize();
+
+    const sunUp = THREE.MathUtils.smoothstep(sunAlt, -7, 4);
+    this.sunOrbGroup.visible = sunUp > 0.01;
+    const pulse = 1 + Math.sin(timeSec * 1.4) * 0.018;
+    this.sunOrbGroup.scale.setScalar(pulse);
+    this.sunCoreMat.color.setHex(s.sunTint);
+    this.sunHaloMat.color.setHex(s.sunTint);
+    this.sunHaloMat.opacity = THREE.MathUtils.lerp(0.18, 0.46, sunUp);
+    this.sunGlowMat.color.setHex(s.sunTint);
+    this.sunGlowMat.opacity = THREE.MathUtils.lerp(0.08, 0.24, sunUp);
+    this.sunSpriteMat.color.setHex(s.sunTint);
+    this.sunSpriteMat.opacity = 0.9 * sunUp;
+    this.skyUniforms.sunGlow.value = 1.25 * sunUp;
+
+    // --- Moon rises as the lamps are lit ---
+    const moonRise = THREE.MathUtils.smoothstep(t, 0.5, 0.95);
+    const moonAlt = THREE.MathUtils.lerp(-14, 27, moonRise);
+    this.moonPosition.set(30, moonAlt, -50);
+    this.moonOrbGroup.position.copy(this.moonPosition);
+    const moonUp = THREE.MathUtils.smoothstep(moonAlt, -6, 4) * s.moon;
+    this.moonOrbGroup.visible = moonUp > 0.02;
+    this.moonHaloMat.opacity = 0.2 * moonUp;
+    this.moonSpriteMat.opacity = 0.62 * moonUp;
+    this.moonGlitterMat.opacity = 0.5 * moonUp;
+    this.moonGlitter.visible = moonUp > 0.02;
+
+    // --- Lights ---
+    this.hemiLight.color.setHex(s.hemiSky);
+    this.hemiLight.groundColor.setHex(s.hemiGround);
+    this.hemiLight.intensity = s.hemiIntensity;
+    this.sunLight.color.setHex(s.lightTint);
+    this.sunLight.intensity = s.lightIntensity * THREE.MathUtils.lerp(0.4, 1, sunUp);
+    this.sunLight.position.set(-16, Math.max(7, sunAlt * 0.85 + 9), -18);
+    this.warmPointLight.intensity = THREE.MathUtils.lerp(
+      0.35,
+      2.5,
+      THREE.MathUtils.smoothstep(t, 0.3, 0.86)
     );
 
-    this.hemiLight.intensity = THREE.MathUtils.lerp(1.22, 0.48, t);
-    this.warmPointLight.intensity = THREE.MathUtils.lerp(0.4, 2.6, t);
-    this.waterSharedMat.emissiveIntensity = THREE.MathUtils.lerp(0.28, 0.62, t);
+    // --- Sky, fog, exposure ---
+    const horizonGlow = this.scratchColorD.copy(horizonColor).lerp(midColor, 0.3);
+    (this.scene.background as THREE.Color).copy(horizonGlow);
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.copy(horizonGlow);
+      this.scene.fog.density = s.fogDensity;
+    }
+    this.renderer.toneMappingExposure = s.exposure;
+
+    // --- Stars twinkle in once the sun is gone ---
+    for (let i = 0; i < this.starMats.length; i++) {
+      const layerWeight = i === 0 ? 1 : i === 1 ? 0.82 : 0.62;
+      const twinkle = 0.8 + Math.sin(timeSec * (1.1 + i * 0.6) + i * 2.1) * 0.2;
+      this.starMats[i].opacity = Math.min(
+        1,
+        s.stars * layerWeight * twinkle
+      );
+    }
+    for (const star of this.starLayers) {
+      star.rotation.y = timeSec * 0.008;
+    }
+
+    // --- Clouds drift and pick up the sky tint ---
+    if (this.cloudGroup) {
+      this.cloudGroup.position.x = Math.sin(timeSec * 0.02) * 2.4;
+      this.cloudGroup.position.y = Math.sin(timeSec * 0.045) * 0.25;
+      this.cloudMat.color.setHex(s.cloudTint);
+      this.cloudMat.emissive.setHex(s.cloudTint);
+      this.cloudMat.opacity = s.cloudOpacity;
+      this.cloudMat.emissiveIntensity = THREE.MathUtils.lerp(0.25, 0.7, s.stars);
+    }
+
+    // --- Distant ghat silhouettes and their lamps ---
+    this.distantMat.color.setHex(s.distant);
+    this.distantShoreMat.color.setHex(lerpHex(s.distant, s.skyHorizon, 0.16));
+    this.shoreLightMat.opacity = 0.9 * THREE.MathUtils.smoothstep(t, 0.55, 0.9);
+    this.shoreLightMat.color.setHex(lerpHex(0xffb765, 0xffd9a0, s.stars));
+
+    // --- Water ---
+    this.riverMat.color.setHex(s.waterTint);
+    this.waterSharedMat.emissiveIntensity = THREE.MathUtils.lerp(0.26, 0.66, t);
     this.waterSharedMat.opacity = 0.82 + Math.sin(timeSec * 0.7) * 0.04;
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.18, 0.92, t);
+    this.waterSharedMat.color.setHex(
+      lerpHex(0x0e8aaa, 0x0b3350, THREE.MathUtils.smoothstep(t, 0.45, 0.95))
+    );
+    this.sunGlitterMat.opacity = 0.72 * s.glitter * sunUp;
+
+    // --- Fireflies & motes ---
+    this.fireflyMat.opacity = THREE.MathUtils.lerp(
+      0.1,
+      0.85,
+      THREE.MathUtils.smoothstep(t, 0.25, 0.8)
+    );
+    this.fireflyMat.color.setHex(lerpHex(0xffe9a3, 0xffd27a, s.stars));
   }
+
 
   private rebuildGhostMesh(): void {
     if (this.ghostGroup) {
@@ -818,9 +1490,9 @@ export class GhatSceneManager {
   }
 
   private getIdealDefaultRadius(aspect: number): number {
-    if (aspect < 0.65) return 22.5; // Tall mobile portrait
-    if (aspect < 1.0) return 18.5; // Tablet / square portrait
-    return 14.5; // Desktop / landscape
+    if (aspect < 0.65) return 23.0; // Tall mobile portrait
+    if (aspect < 1.0) return 19.0; // Tablet / square portrait
+    return 15.5; // Desktop / landscape
   }
 
   public adjustCamera(dTheta: number, dZoom: number): void {
@@ -833,9 +1505,9 @@ export class GhatSceneManager {
   }
 
   public resetCameraView(): void {
-    this.targetCamTarget.set(0, 0.2, 0);
+    this.targetCamTarget.set(0, 0.35, 0);
     this.targetTheta = Math.PI * 0.22;
-    this.targetPhi = 0.88;
+    this.targetPhi = 1.24;
     this.targetRadius = this.getIdealDefaultRadius(this.camera.aspect || 1);
   }
 
@@ -1029,8 +1701,8 @@ export class GhatSceneManager {
         this.targetTheta -= dx * 0.0075;
         this.targetPhi = THREE.MathUtils.clamp(
           this.targetPhi - dy * 0.006,
-          0.42,
-          1.26
+          0.4,
+          1.46
         );
         this.lastDragPos = { x: e.clientX, y: e.clientY };
         return;
@@ -1147,7 +1819,7 @@ export class GhatSceneManager {
     this.camera.lookAt(this.camTarget);
 
     // Update sky & dynamic Chhath sunset lighting
-    this.updateAtmosphere(elapsed);
+    this.updateAtmosphere(elapsed, dt);
 
     // Update overshoot spring bounce animations
     for (let i = this.springs.length - 1; i >= 0; i--) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { BuildingItemId } from '../types/game';
 
 const MAT = {
@@ -37,6 +38,13 @@ const MAT = {
   terracottaDark: new THREE.MeshStandardMaterial({ color: 0x7c2d12, roughness: 0.84 }),
   terracottaLight: new THREE.MeshStandardMaterial({ color: 0xcd6a3a, roughness: 0.74 }),
   clayVedi: new THREE.MeshStandardMaterial({ color: 0xc26d3d, roughness: 0.86 }),
+  caneGreen: new THREE.MeshStandardMaterial({ color: 0x7cb02c, roughness: 0.46 }),
+  caneGreenDeep: new THREE.MeshStandardMaterial({ color: 0x5f9120, roughness: 0.5 }),
+  canePale: new THREE.MeshStandardMaterial({ color: 0xbcd97a, roughness: 0.42 }),
+  caneNode: new THREE.MeshStandardMaterial({ color: 0xdbeaa4, roughness: 0.38 }),
+  paintCream: new THREE.MeshStandardMaterial({ color: 0xf5e6c8, roughness: 0.5 }),
+  paintRed: new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.52 }),
+  eyeDark: new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.4 }),
   coconutBrown: new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.86 }),
   thekuaBrown: new THREE.MeshStandardMaterial({ color: 0x8c4a27, roughness: 0.7 }),
   waterFill: new THREE.MeshStandardMaterial({
@@ -73,6 +81,88 @@ function addShadow(mesh: THREE.Mesh, receive = true): THREE.Mesh {
   mesh.castShadow = true;
   mesh.receiveShadow = receive;
   return mesh;
+}
+
+/**
+ * Bakes every static mesh of an item into one mesh per material. Animated
+ * pieces (diya flames & fairy bulbs) are intentionally left untouched.
+ * This keeps a fully decorated 12x12 ghat at a friendly draw-call budget.
+ */
+function mergeStaticMeshes(root: THREE.Group): void {
+  root.updateMatrixWorld(true);
+  const inverseRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+
+  interface Bucket {
+    material: THREE.Material;
+    geometries: THREE.BufferGeometry[];
+    meshes: THREE.Mesh[];
+  }
+  const buckets = new Map<THREE.Material, Bucket>();
+
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    if (mesh.userData.isFlame || mesh.userData.isFairyLight) return;
+    if (Array.isArray(mesh.material)) return;
+
+    const material = mesh.material as THREE.Material;
+    const geometry = mesh.geometry.clone();
+    const localMatrix = new THREE.Matrix4().multiplyMatrices(inverseRoot, mesh.matrixWorld);
+    geometry.applyMatrix4(localMatrix);
+
+    const bucket = buckets.get(material);
+    if (bucket) {
+      bucket.geometries.push(geometry);
+      bucket.meshes.push(mesh);
+    } else {
+      buckets.set(material, { material, geometries: [geometry], meshes: [mesh] });
+    }
+  });
+
+  let totalMeshes = 0;
+  for (const bucket of buckets.values()) totalMeshes += bucket.meshes.length;
+  if (totalMeshes < 3) return;
+
+  // Bail out if any material group cannot be merged so items never disappear
+  const mergedResults: Array<{ bucket: Bucket; geometry: THREE.BufferGeometry }> = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.geometries.length === 0) continue;
+    const first = bucket.geometries[0].attributes;
+    const compatible = bucket.geometries.every(
+      (g) =>
+        g.attributes.position !== undefined &&
+        g.attributes.normal !== undefined &&
+        Boolean(g.attributes.uv) === Boolean(first.uv) &&
+        Boolean(g.index) === Boolean(bucket.geometries[0].index)
+    );
+    let merged: THREE.BufferGeometry | null = null;
+    if (compatible) {
+      try {
+        merged = mergeGeometries(bucket.geometries, false);
+      } catch {
+        merged = null;
+      }
+    }
+    if (!merged) {
+      for (const bucketToDispose of buckets.values()) {
+        for (const geo of bucketToDispose.geometries) geo.dispose();
+      }
+      return;
+    }
+    mergedResults.push({ bucket, geometry: merged });
+  }
+
+  for (const bucket of buckets.values()) {
+    for (const mesh of bucket.meshes) mesh.removeFromParent();
+    for (const geometry of bucket.geometries) geometry.dispose();
+  }
+
+  for (const { bucket, geometry } of mergedResults) {
+    const mesh = new THREE.Mesh(geometry, bucket.material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    root.add(mesh);
+  }
 }
 
 export function createDiyaSubMesh(scale = 1): THREE.Group {
@@ -128,6 +218,93 @@ function createLotusBloom(scale = 1, y = 0): THREE.Group {
   core.scale.setScalar(0.032 * scale);
   core.position.y = 0.04 * scale;
   g.add(core);
+  return g;
+}
+
+/**
+ * Tapered, slightly flattened leaf blade. Built with its base at the origin
+ * and its tip pointing along +Y so it can be angled with a single rotation.
+ */
+function createLeafBlade(
+  length: number,
+  width: number,
+  material: THREE.Material,
+  segments = 4
+): THREE.Mesh {
+  const geo = new THREE.ConeGeometry(width, length, segments, 1, false);
+  geo.scale(1, 1, 0.16);
+  geo.translate(0, length / 2, 0);
+  const blade = addShadow(new THREE.Mesh(geo, material), false);
+  return blade;
+}
+
+/**
+ * A single green sugarcane stalk: tapered cane, pale growth nodes and a
+ * crown of arching leaf blades. Built in local space with its base at y = 0.
+ */
+function createCaneStalk(height = 1.12, seed = 0): THREE.Group {
+  const g = new THREE.Group();
+  const baseRad = 0.027;
+  const tipRad = 0.0155;
+
+  const stalk = addShadow(
+    new THREE.Mesh(
+      new THREE.CylinderGeometry(tipRad, baseRad, height, 9),
+      seed % 2 === 0 ? MAT.caneGreen : MAT.caneGreenDeep
+    )
+  );
+  stalk.position.y = height / 2;
+  g.add(stalk);
+
+  // Pale, slightly swollen nodes climbing the cane
+  const nodeCount = 5;
+  for (let n = 0; n < nodeCount; n++) {
+    const t = 0.18 + (n / (nodeCount - 1)) * 0.68;
+    const y = height * t;
+    const rad = THREE.MathUtils.lerp(baseRad, tipRad, t) + 0.004;
+    const node = new THREE.Mesh(
+      new THREE.CylinderGeometry(rad, rad, 0.022, 9),
+      MAT.caneNode
+    );
+    node.position.y = y;
+    g.add(node);
+
+    // Tiny leaf scar just above each node
+    if (n % 2 === 0) {
+      const scar = new THREE.Mesh(
+        new THREE.BoxGeometry(rad * 1.5, 0.012, 0.026),
+        MAT.canePale
+      );
+      scar.position.set(rad * 0.85, y + 0.03, 0);
+      scar.rotation.z = -0.3;
+      g.add(scar);
+    }
+  }
+
+  // Long, tapered leaf blades that arch out then droop back down
+  const bladeCount = 5;
+  for (let b = 0; b < bladeCount; b++) {
+    const ang = (b / bladeCount) * Math.PI * 2 + seed * 0.7;
+    const arm = new THREE.Group();
+    arm.position.y = height - 0.02;
+    arm.rotation.y = ang;
+
+    const blade = createLeafBlade(
+      0.25 + (b % 3) * 0.06,
+      0.04,
+      b % 3 === 0 ? MAT.leafDark : b % 2 === 0 ? MAT.leafLush : MAT.leafEmerald
+    );
+    blade.rotation.x = Math.PI / 2 + 0.62 + (b % 3) * 0.16;
+    arm.add(blade);
+
+    g.add(arm);
+  }
+
+  // Pale cut tip where the cane was harvested
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(tipRad * 0.9, tipRad, 0.022, 9), MAT.canePale);
+  tip.position.y = height + 0.004;
+  g.add(tip);
+
   return g;
 }
 
@@ -292,48 +469,157 @@ export function buildItemMesh(itemId: BuildingItemId): THREE.Group {
     }
 
     case 'sugarcane': {
-      const caneCount = 5;
-      for (let i = 0; i < caneCount; i++) {
-        const angle = (i / caneCount) * Math.PI * 2;
-        const r = 0.26;
-        const stalkHolder = new THREE.Group();
-        stalkHolder.position.set(Math.cos(angle) * r, 0, Math.sin(angle) * r);
-        stalkHolder.lookAt(0, 0.2, 0);
-
-        const stalk = addShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 1.12, 8), MAT.bambooGreen));
-        stalk.position.set(0, 0.52, 0.12);
-        stalk.rotation.x = 0.22;
-        stalkHolder.add(stalk);
-
-        for (let n = 0; n < 5; n++) {
-          const node = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.018, 8), MAT.caneStripe);
-          node.position.set(0, 0.22 + n * 0.18, 0.05 + n * 0.03);
-          node.rotation.x = 0.22;
-          stalkHolder.add(node);
-        }
-
-        for (let l = -1; l <= 1; l++) {
-          const leaf = addShadow(new THREE.Mesh(new THREE.ConeGeometry(0.034, 0.34, 5), MAT.leafLush), false);
-          leaf.position.set(l * 0.035, 1.12, 0.26);
-          leaf.rotation.x = 0.7;
-          leaf.rotation.z = l * 0.32;
-          stalkHolder.add(leaf);
-        }
-
-        root.add(stalkHolder);
-      }
-
-      const tie = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.02, 8, 14), MAT.crimsonCloth);
-      tie.rotation.x = Math.PI / 2;
-      tie.position.y = 0.9;
-      root.add(tie);
-
-      const cloth = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 0.02, 12), MAT.saffronCloth);
-      cloth.position.y = 0.01;
+      // --- Festive cloth mat that anchors the mandap ---
+      const cloth = new THREE.Mesh(new THREE.CircleGeometry(0.45, 26), MAT.saffronCloth);
+      cloth.rotation.x = -Math.PI / 2;
+      cloth.position.y = 0.006;
+      cloth.receiveShadow = true;
       root.add(cloth);
 
-      const centerDiya = createDiyaSubMesh(1.0);
-      centerDiya.position.y = 0.02;
+      const clothRim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.43, 0.014, 8, 30),
+        MAT.goldBrass
+      );
+      clothRim.rotation.x = Math.PI / 2;
+      clothRim.position.y = 0.014;
+      root.add(clothRim);
+
+      // --- Five sugarcane stalks leaning inward into a leafy canopy ---
+      const caneCount = 5;
+      const baseRadius = 0.33;
+      const topRadius = 0.16;
+      const caneHeight = 1.12;
+      const lean = Math.atan2(baseRadius - topRadius, caneHeight);
+      const stalkLength = caneHeight / Math.cos(lean);
+
+      for (let i = 0; i < caneCount; i++) {
+        const ang = (i / caneCount) * Math.PI * 2 + Math.PI / 2;
+        const holder = new THREE.Group();
+        holder.position.set(Math.cos(ang) * baseRadius, 0.012, Math.sin(ang) * baseRadius);
+        const tiltAxis = new THREE.Vector3(Math.sin(ang), 0, -Math.cos(ang));
+        holder.quaternion.setFromAxisAngle(tiltAxis, -lean);
+        holder.add(createCaneStalk(stalkLength, i));
+        root.add(holder);
+
+        // A marigold bulb blinking at each cane tip
+        const bulb = new THREE.Mesh(GEO.sphereLow, MAT.fairyBulb);
+        bulb.scale.setScalar(0.016);
+        const tipR = topRadius + 0.01;
+        bulb.position.set(Math.cos(ang) * tipR, caneHeight + 0.02, Math.sin(ang) * tipR);
+        bulb.userData.isFairyLight = true;
+        root.add(bulb);
+      }
+
+      // --- Crimson cloth tie binding the bundle together ---
+      const tie = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 0.055, 26, 1, true),
+        MAT.crimsonCloth
+      );
+      tie.position.y = 0.62;
+      root.add(tie);
+
+      for (const trimY of [0.595, 0.646]) {
+        const trim = new THREE.Mesh(
+          new THREE.TorusGeometry(0.2515, 0.0055, 7, 30),
+          MAT.goldBrass
+        );
+        trim.rotation.x = Math.PI / 2;
+        trim.position.y = trimY;
+        root.add(trim);
+      }
+
+      // Two little marigold tassels dangling off the knot
+      for (const dir of [-1, 1]) {
+        const tx = dir * 0.255;
+        const tasselGroup = new THREE.Group();
+        tasselGroup.position.set(tx, 0.61, 0.08 * dir);
+        for (let b = 0; b < 3; b++) {
+          const bead = new THREE.Mesh(
+            GEO.sphereLow,
+            b % 2 === 0 ? MAT.marigoldOrange : MAT.marigoldYellow
+          );
+          bead.scale.setScalar(0.026 - b * 0.004);
+          bead.position.y = -b * 0.048;
+          tasselGroup.add(bead);
+        }
+        const tasselCone = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.085, 6), MAT.crimsonCloth);
+        tasselCone.rotation.x = Math.PI;
+        tasselCone.position.y = -0.17;
+        tasselGroup.add(tasselCone);
+        root.add(tasselGroup);
+      }
+
+      // --- Canopy ring: gold hoop, marigold blooms and hanging mango leaves ---
+      const canopy = new THREE.Mesh(new THREE.TorusGeometry(0.183, 0.011, 8, 26), MAT.goldBrass);
+      canopy.rotation.x = Math.PI / 2;
+      canopy.position.y = 1.07;
+      root.add(canopy);
+
+      const bloomCount = 12;
+      for (let b = 0; b < bloomCount; b++) {
+        const a = (b / bloomCount) * Math.PI * 2;
+        const puff = new THREE.Mesh(
+          GEO.sphereLow,
+          b % 2 === 0 ? MAT.marigoldOrange : MAT.marigoldYellow
+        );
+        puff.scale.setScalar(0.027 + (b % 3) * 0.005);
+        puff.position.set(Math.cos(a) * 0.188, 1.07 + (b % 2) * 0.022, Math.sin(a) * 0.188);
+        root.add(puff);
+      }
+
+      for (let l = 0; l < 9; l++) {
+        const a = (l / 9) * Math.PI * 2 + 0.25;
+        const hanger = new THREE.Group();
+        hanger.position.set(Math.cos(a) * 0.181, 1.055, Math.sin(a) * 0.181);
+        hanger.rotation.y = -a + Math.PI / 2;
+
+        const leaf = createLeafBlade(
+          0.19 + (l % 3) * 0.05,
+          0.042,
+          l % 2 === 0 ? MAT.leafEmerald : MAT.leafLush
+        );
+        // Tip points down and slightly outwards
+        leaf.rotation.x = Math.PI * 0.92;
+        leaf.rotation.z = (l % 3 === 0 ? 1 : -1) * 0.16;
+        hanger.add(leaf);
+        root.add(hanger);
+      }
+
+      // --- Brass kalash, coconut and a lit diya at the heart of the mandap ---
+      const kalashBody = addShadow(new THREE.Mesh(GEO.sphereMed, MAT.goldBrass));
+      kalashBody.scale.set(0.085, 0.1, 0.085);
+      kalashBody.position.y = 0.2;
+      root.add(kalashBody);
+
+      const kalashNeck = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.036, 0.056, 0.06, 10),
+        MAT.goldBright
+      );
+      kalashNeck.position.y = 0.29;
+      root.add(kalashNeck);
+
+      const kalashRim = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.011, 7, 14), MAT.goldBrass);
+      kalashRim.rotation.x = Math.PI / 2;
+      kalashRim.position.y = 0.318;
+      root.add(kalashRim);
+
+      const coconut = new THREE.Mesh(GEO.sphereMed, MAT.coconutBrown);
+      coconut.scale.set(0.055, 0.062, 0.055);
+      coconut.position.y = 0.37;
+      root.add(coconut);
+
+      for (const dir of [-1, 1]) {
+        const kalashLeaf = addShadow(
+          new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.12), MAT.leafEmerald),
+          false
+        );
+        kalashLeaf.position.set(dir * 0.075, 0.34, 0.01);
+        kalashLeaf.rotation.z = dir * 0.75;
+        root.add(kalashLeaf);
+      }
+
+      const centerDiya = createDiyaSubMesh(0.95);
+      centerDiya.position.set(0, 0.012, 0.245);
       root.add(centerDiya);
       break;
     }
@@ -703,85 +989,247 @@ export function buildItemMesh(itemId: BuildingItemId): THREE.Group {
     }
 
     case 'kosi': {
-      const cloth = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.34, 0.022, 14), MAT.saffronCloth);
-      cloth.position.y = 0.012;
-      root.add(cloth);
+      // --- Saffron mat ---
+      const mat = new THREE.Mesh(new THREE.CircleGeometry(0.42, 26), MAT.saffronCloth);
+      mat.rotation.x = -Math.PI / 2;
+      mat.position.y = 0.005;
+      mat.receiveShadow = true;
+      root.add(mat);
 
-      const body = addShadow(new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 14), MAT.terracotta));
-      body.scale.set(1, 0.92, 0.82);
-      body.position.set(0, 0.26, 0);
+      const matTrim = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.011, 8, 28), MAT.goldBrass);
+      matTrim.rotation.x = Math.PI / 2;
+      matTrim.position.y = 0.012;
+      root.add(matTrim);
+
+      for (const [fx, fz] of [
+        [-0.3, 0.19],
+        [-0.22, 0.28],
+        [0.3, 0.18],
+      ]) {
+        const flower = new THREE.Mesh(
+          GEO.sphereLow,
+          fz > 0.24 ? MAT.marigoldYellow : MAT.marigoldOrange
+        );
+        flower.scale.setScalar(0.032);
+        flower.position.set(fx, 0.022, fz);
+        root.add(flower);
+      }
+
+      // --- Hand-thrown terracotta Kosi pot ---
+      const foot = addShadow(
+        new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.145, 0.06, 18), MAT.terracottaDark)
+      );
+      foot.position.y = 0.042;
+      root.add(foot);
+
+      const body = addShadow(new THREE.Mesh(new THREE.SphereGeometry(0.215, 24, 20), MAT.terracotta));
+      body.scale.set(1, 0.96, 1);
+      body.position.y = 0.29;
       root.add(body);
 
-      const neck = addShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 0.14, 12), MAT.terracottaLight));
-      neck.position.set(0, 0.48, 0);
-      root.add(neck);
-
-      const rim = addShadow(new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.022, 8, 16), MAT.terracottaDark), false);
-      rim.rotation.x = Math.PI / 2;
-      rim.position.set(0, 0.55, 0);
-      root.add(rim);
-
-      const water = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.082, 0.02, 12), MAT.waterFill);
-      water.position.set(0, 0.54, 0);
-      root.add(water);
-
-      const head = addShadow(new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), MAT.terracottaLight));
-      head.scale.set(1.05, 0.85, 1.15);
-      head.position.set(0, 0.34, 0.24);
-      root.add(head);
-
-      const trunkCurve = new THREE.Group();
-      trunkCurve.position.set(0, 0.3, 0.32);
-      const trunk = addShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.048, 0.22, 10), MAT.terracotta));
-      trunk.rotation.x = 0.85;
-      trunk.position.set(0, -0.04, 0.08);
-      trunkCurve.add(trunk);
-      const trunkTip = addShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.03, 0.12, 8), MAT.terracottaDark), false);
-      trunkTip.rotation.x = 1.35;
-      trunkTip.position.set(0, -0.12, 0.16);
-      trunkCurve.add(trunkTip);
-      root.add(trunkCurve);
-
-      for (const sx of [-1, 1]) {
-        const ear = addShadow(new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), MAT.terracottaDark), false);
-        ear.scale.set(0.28, 0.85, 0.7);
-        ear.position.set(sx * 0.16, 0.36, 0.18);
-        root.add(ear);
+      // Painted cream & marigold bands plus a ring of white dots
+      for (const [by, br] of [
+        [0.18, 0.183],
+        [0.4, 0.184],
+      ]) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(br, 0.008, 8, 32), MAT.paintCream);
+        band.rotation.x = Math.PI / 2;
+        band.position.y = by;
+        root.add(band);
       }
 
-      for (const sx of [-1, 1]) {
-        const tusk = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.1, 8), MAT.whitePaste);
-        tusk.rotation.x = 1.2;
-        tusk.position.set(sx * 0.05, 0.26, 0.34);
-        root.add(tusk);
-      }
+      const marigoldBand = new THREE.Mesh(
+        new THREE.TorusGeometry(0.2, 0.007, 7, 30),
+        MAT.marigoldOrange
+      );
+      marigoldBand.rotation.x = Math.PI / 2;
+      marigoldBand.position.y = 0.21;
+      root.add(marigoldBand);
 
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.018, 8, 18), MAT.marigoldYellow);
-      band.rotation.x = Math.PI / 2;
-      band.position.set(0, 0.3, 0);
-      root.add(band);
-
-      const sindoor = new THREE.Mesh(GEO.sphereLow, MAT.vermilion);
-      sindoor.scale.setScalar(0.028);
-      sindoor.position.set(0, 0.42, 0.3);
-      root.add(sindoor);
-
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        const dot = new THREE.Mesh(GEO.sphereLow, i % 2 === 0 ? MAT.whitePaste : MAT.marigoldOrange);
-        dot.scale.setScalar(0.018);
-        dot.position.set(Math.cos(a) * 0.2, 0.22, Math.sin(a) * 0.16);
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        const dot = new THREE.Mesh(GEO.sphereLow, i % 2 === 0 ? MAT.paintCream : MAT.marigoldYellow);
+        dot.scale.setScalar(0.013);
+        dot.position.set(Math.cos(a) * 0.2165, 0.29, Math.sin(a) * 0.2165);
         root.add(dot);
       }
 
-      const topDiya = createDiyaSubMesh(0.78);
-      topDiya.position.set(0, 0.56, 0);
-      root.add(topDiya);
+      const neck = addShadow(
+        new THREE.Mesh(new THREE.CylinderGeometry(0.093, 0.135, 0.1, 18), MAT.terracottaLight)
+      );
+      neck.position.y = 0.535;
+      root.add(neck);
 
-      const mangoLeaf = addShadow(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.012, 0.16), MAT.leafEmerald), false);
-      mangoLeaf.position.set(0.08, 0.57, 0.02);
-      mangoLeaf.rotation.z = 0.4;
-      root.add(mangoLeaf);
+      const rim = addShadow(
+        new THREE.Mesh(new THREE.TorusGeometry(0.098, 0.015, 9, 26), MAT.terracottaDark),
+        false
+      );
+      rim.rotation.x = Math.PI / 2;
+      rim.position.y = 0.588;
+      root.add(rim);
+
+      const water = new THREE.Mesh(new THREE.CylinderGeometry(0.086, 0.086, 0.016, 18), MAT.waterFill);
+      water.position.y = 0.582;
+      root.add(water);
+
+      // --- Moulded elephant head crowning the pot's shoulder ---
+      const head = addShadow(new THREE.Mesh(new THREE.SphereGeometry(0.15, 20, 16), MAT.terracottaLight));
+      head.scale.set(1.06, 0.94, 0.92);
+      head.position.set(0, 0.435, 0.175);
+      root.add(head);
+
+      const forehead = addShadow(
+        new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), MAT.terracottaLight),
+        false
+      );
+      forehead.scale.set(1, 0.76, 0.95);
+      forehead.position.set(0, 0.505, 0.16);
+      root.add(forehead);
+
+      const crown = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.083, 0.089, 0.024, 18),
+        MAT.goldBrass
+      );
+      crown.position.set(0, 0.545, 0.155);
+      crown.rotation.x = -0.14;
+      root.add(crown);
+
+      const crownJewel = new THREE.Mesh(GEO.sphereLow, MAT.marigoldYellow);
+      crownJewel.scale.setScalar(0.02);
+      crownJewel.position.set(0, 0.568, 0.16);
+      root.add(crownJewel);
+
+      for (const sx of [-1, 1]) {
+        const ear = addShadow(
+          new THREE.Mesh(new THREE.SphereGeometry(0.105, 14, 12), MAT.terracottaDark),
+          false
+        );
+        ear.scale.set(0.24, 0.95, 0.8);
+        ear.position.set(sx * 0.165, 0.43, 0.135);
+        ear.rotation.z = -sx * 0.25;
+        root.add(ear);
+
+        const innerEar = new THREE.Mesh(new THREE.SphereGeometry(0.065, 12, 10), MAT.roseMagenta);
+        innerEar.scale.set(0.14, 0.8, 0.55);
+        innerEar.position.set(sx * 0.172, 0.43, 0.19);
+        innerEar.rotation.z = -sx * 0.25;
+        root.add(innerEar);
+
+        const eye = new THREE.Mesh(GEO.sphereLow, MAT.paintCream);
+        eye.scale.set(0.026, 0.024, 0.015);
+        eye.position.set(sx * 0.075, 0.465, 0.288);
+        root.add(eye);
+
+        const pupil = new THREE.Mesh(GEO.sphereLow, MAT.eyeDark);
+        pupil.scale.setScalar(0.013);
+        pupil.position.set(sx * 0.077, 0.465, 0.3);
+        root.add(pupil);
+
+        const brow = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.008, 0.012), MAT.eyeDark);
+        brow.position.set(sx * 0.078, 0.489, 0.29);
+        brow.rotation.z = sx * 0.09;
+        root.add(brow);
+
+        const tusk = new THREE.Mesh(new THREE.ConeGeometry(0.017, 0.11, 10), MAT.whitePaste);
+        tusk.rotation.x = 2.05;
+        tusk.rotation.z = sx * 0.15;
+        tusk.position.set(sx * 0.07, 0.385, 0.3);
+        root.add(tusk);
+      }
+
+      // Softly curling trunk built from a smooth Catmull-Rom spine
+      const trunkSpine = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 0.43, 0.29),
+        new THREE.Vector3(0.01, 0.385, 0.33),
+        new THREE.Vector3(0.035, 0.32, 0.356),
+        new THREE.Vector3(0.07, 0.25, 0.371),
+        new THREE.Vector3(0.105, 0.185, 0.368),
+        new THREE.Vector3(0.128, 0.13, 0.348),
+        new THREE.Vector3(0.133, 0.092, 0.32),
+        new THREE.Vector3(0.122, 0.072, 0.292),
+        new THREE.Vector3(0.104, 0.072, 0.272),
+      ]);
+      const trunkSamples = 20;
+      for (let i = 0; i <= trunkSamples; i++) {
+        const tt = i / trunkSamples;
+        const pt = trunkSpine.getPoint(tt);
+        const rad = THREE.MathUtils.lerp(0.052, 0.017, Math.pow(tt, 0.85));
+        const seg = addShadow(
+          new THREE.Mesh(new THREE.SphereGeometry(rad, 12, 10), MAT.terracotta),
+          tt > 0.45
+        );
+        seg.scale.set(1, 1.05, 1.05);
+        seg.position.copy(pt);
+        root.add(seg);
+      }
+
+      // Trunk wrinkle rings
+      for (const [tx, ty, tz, tr] of [
+        [0.037, 0.318, 0.357, 0.045],
+        [0.088, 0.232, 0.372, 0.037],
+        [0.128, 0.142, 0.352, 0.029],
+      ]) {
+        const wrinkle = new THREE.Mesh(
+          new THREE.TorusGeometry(tr, 0.005, 6, 16),
+          MAT.terracottaDark
+        );
+        wrinkle.rotation.x = Math.PI / 2;
+        wrinkle.position.set(tx, ty, tz);
+        root.add(wrinkle);
+      }
+
+      // Marigold garland around the elephant's neck
+      const neckGarland = new THREE.Mesh(
+        new THREE.TorusGeometry(0.108, 0.017, 8, 24),
+        MAT.marigoldYellow
+      );
+      neckGarland.rotation.x = Math.PI / 2;
+      neckGarland.position.set(0, 0.345, 0.09);
+      root.add(neckGarland);
+
+      // Tilak & sandal marks
+      const tilak = new THREE.Mesh(GEO.sphereLow, MAT.vermilion);
+      tilak.scale.set(0.018, 0.03, 0.012);
+      tilak.position.set(0, 0.51, 0.226);
+      root.add(tilak);
+
+      for (const sx of [-1, 1]) {
+        const sandal = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.042, 0.008), MAT.paintCream);
+        sandal.position.set(sx * 0.028, 0.505, 0.227);
+        sandal.rotation.z = -sx * 0.12;
+        root.add(sandal);
+      }
+
+      // Mango leaves fanned around the mouth of the pot
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.5;
+        const hanger = new THREE.Group();
+        hanger.position.set(Math.cos(a) * 0.085, 0.59, Math.sin(a) * 0.085);
+        hanger.rotation.y = -a + Math.PI / 2;
+        const leaf = createLeafBlade(0.17, 0.045, i % 2 === 0 ? MAT.leafEmerald : MAT.leafLush);
+        leaf.rotation.x = 1.0 + (i % 2) * 0.12;
+        hanger.add(leaf);
+        root.add(hanger);
+      }
+
+      const coconut = new THREE.Mesh(GEO.sphereMed, MAT.coconutBrown);
+      coconut.scale.set(0.052, 0.058, 0.052);
+      coconut.position.set(0.01, 0.655, -0.012);
+      root.add(coconut);
+
+      const rimFlower = new THREE.Mesh(GEO.sphereLow, MAT.marigoldOrange);
+      rimFlower.scale.setScalar(0.03);
+      rimFlower.position.set(0.075, 0.612, 0.05);
+      root.add(rimFlower);
+
+      // Two welcome diyas flanking the pot on the mat
+      const leftDiya = createDiyaSubMesh(0.8);
+      leftDiya.position.set(-0.25, 0.014, 0.09);
+      root.add(leftDiya);
+
+      const rightDiya = createDiyaSubMesh(0.8);
+      rightDiya.position.set(0.245, 0.014, -0.13);
+      root.add(rightDiya);
       break;
     }
 
@@ -789,5 +1237,6 @@ export function buildItemMesh(itemId: BuildingItemId): THREE.Group {
       break;
   }
 
+  mergeStaticMeshes(root);
   return root;
 }
