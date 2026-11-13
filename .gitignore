@@ -1,0 +1,15 @@
+# dependencies
+workspace/node_modules/
+
+# build output
+workspace/dist/
+
+# local env & logs
+.env
+.env.local
+*.log
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
