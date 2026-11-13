@@ -402,7 +402,6 @@ export function App() {
               soundEngine.playRotate();
             }}
             onRotate={handleRotate}
-            onResetCamera={() => sceneRef.current?.resetCameraView()}
           />
         </>
       )}
