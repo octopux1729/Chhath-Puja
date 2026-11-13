@@ -846,9 +846,9 @@ export class GhatSceneManager {
     const lampPositions = new Float32Array(lampCount * 3);
     for (let i = 0; i < lampCount; i++) {
       const ang = (i / lampCount) * Math.PI * 2 + Math.random() * 0.04;
-      const rad = 36.4 + Math.random() * 1.6;
+      const rad = 37.2 + Math.random() * 1.4;
       lampPositions[i * 3] = Math.cos(ang) * rad;
-      lampPositions[i * 3 + 1] = -0.25 + Math.random() * 1.8;
+      lampPositions[i * 3 + 1] = -0.5 + Math.random() * 0.95;
       lampPositions[i * 3 + 2] = Math.sin(ang) * rad;
     }
     const lampGeo = new THREE.BufferGeometry();
